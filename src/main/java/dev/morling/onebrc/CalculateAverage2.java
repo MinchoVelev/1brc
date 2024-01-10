@@ -15,26 +15,20 @@
  */
 package dev.morling.onebrc;
 
-import com.sun.source.tree.Tree;
-
-import static java.util.stream.Collectors.*;
-
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Scanner;
 import java.util.TreeMap;
-import java.util.function.BinaryOperator;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
-public class CalculateAverage {
+import static java.util.stream.Collectors.groupingByConcurrent;
+
+public class CalculateAverage2 {
 
     private static final String FILE = "./measurements.txt";
     private static final int THREADS = 8;
-    private static final int BUFFER_SIZE = 1_000_000_000;
+    private static final int BUFFER_SIZE = 2_000_000_000;
 
     private static final int PAGE_SIZE = BUFFER_SIZE/THREADS;
 
@@ -83,18 +77,9 @@ public class CalculateAverage {
         long testStart = System.currentTimeMillis();
 
 
-        BufferedInputStream bufferedInputStream = new BufferedInputStream(new FileInputStream(FILE), 2_000_000_000);
-
-
-        Map<String, Holder> collect = new BufferedReader(new InputStreamReader(bufferedInputStream)).lines().parallel().map(s -> {
-            String[] split = s.split(";");
-            double v = Double.parseDouble(split[1]);
-            return new Holder(split[0], v, 1, v, v);
-        }).collect(groupingByConcurrent(Holder::name, Collector.of(Holder::new, Holder::merge, Holder::merge)));
-
-
         System.out.println((System.currentTimeMillis() - testStart) + " ms");
 
+        HashMap<String , Holder> collect = new HashMap<>();
         System.out.print("{");
         String resultString = new TreeMap<>(collect).values().stream().map(Holder::toString).collect(Collectors.joining(", "));
         System.out.print(resultString);
