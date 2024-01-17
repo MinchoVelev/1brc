@@ -21,18 +21,15 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLOutput;
 import java.util.*;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
-import static java.util.stream.Collectors.groupingByConcurrent;
-
-public class CalculateAverage2 {
+public class CalculateAverage3 {
 
     private static final String FILE = "./measurements.txt";
-    private static final int THREADS = 230;
-    private static final int BUFFER_SIZE = 30_000_000;
+    private static final int THREADS = Runtime.getRuntime().availableProcessors();
+    private static final int BUFFER_SIZE = 60_000_000;
 
     static class Holder {
         String name;
@@ -77,32 +74,34 @@ public class CalculateAverage2 {
     }
 
     public static void main(String[] args) throws Exception {
+        System.out.println("Available processors: " + THREADS);
         long testStart = System.currentTimeMillis();
+        FileInputStream fileStream = new FileInputStream(FILE);
+        long fileSize = fileStream.getChannel().size();
+        InputStreamReader inputStreamReader = new InputStreamReader(new BufferedInputStream(fileStream));
 
-        RandomAccessFile file = new RandomAccessFile(new File(FILE), "r");
-        FileChannel channel = file.getChannel();
-        Queue<MappedByteBuffer> chunks = new ArrayDeque<>();
-
-        for (int i = 0; i < channel.size() / BUFFER_SIZE + 1; i++) {
-            long positionStart = (long) i * BUFFER_SIZE;
-            long sizeToRead = channel.size() - ((long) i) * BUFFER_SIZE;
-            sizeToRead = Math.min(BUFFER_SIZE, sizeToRead);
-
-            //System.out.println("Reading from " + positionStart + " " + sizeToRead + " bytes. Reading to " + (positionStart + sizeToRead));
-            MappedByteBuffer buff = channel.map(FileChannel.MapMode.READ_ONLY, positionStart, sizeToRead);
-            chunks.add(buff);
-        }
 
         List<Map<String, Holder>> resultMaps = Collections.synchronizedList(new ArrayList<>(32));
         LinkedList<Thread> threads = new LinkedList<>();
+
+        long read = 0;
         int index = 0;
-        int size = chunks.size();
-        while (chunks.size() > 0) {
-            var c = chunks.poll();
-            final int indexTostart = index++;
+        for (; index < fileSize / BUFFER_SIZE - 1; index++) {
+            long positionStart = (long) index * BUFFER_SIZE;
+            long sizeToRead = fileSize - ((long) index) * BUFFER_SIZE;
+            sizeToRead = Math.min(BUFFER_SIZE, sizeToRead);
+
+            char[] bytes = new char[(int) sizeToRead];
+            int bytesRead = inputStreamReader.read(bytes);
+            if (bytesRead < 1) {
+                System.out.println("Failed to read bytes for chunk " + index);
+                continue;
+            }
+
+            final int indexToProcess = index;
             threads.add(Thread.startVirtualThread(() -> {
                 try {
-                    HashMap<String, Holder> r = processChunk(c, indexTostart);
+                    HashMap<String, Holder> r = processChunk(bytes, indexToProcess);
                     resultMaps.add(r);
                 } catch (CharacterCodingException e) {
                     throw new RuntimeException(e);
@@ -115,19 +114,28 @@ public class CalculateAverage2 {
                     t.join();
                 }
                 threads.clear();
-                System.out.println("Processed chunks: " + index + " of " + size);
+                System.out.println("Processed chunks: " + (index + 1) + " of " + (fileSize / BUFFER_SIZE + 1));
             }
-
         }
+
 
         for (var t : threads) {
             t.join();
         }
 
 
+//            if (threads.size() == THREADS) {
+//                for (var t : threads) {
+//                    t.join();
+//                }
+//                threads.clear();
+//                System.out.println("Processed chunks: " + index + " of " + size);
+//            }
+
+
         //process remainders
         Map<String, Holder> first = resultMaps.get(0);
-        for (int i = 0; i < index; i++) {
+        for (int i = 0; i < index - 1; i++) {
             String line = remainders[i] + (startingParts[i + 1] == null ? "" : startingParts[i + 1]);
 
             if (line.isBlank()) {
@@ -175,15 +183,15 @@ public class CalculateAverage2 {
     static String[] remainders = new String[5000];
     static String[] startingParts = new String[5000];
 
-    static HashMap<String, Holder> processChunk(MappedByteBuffer chunk, int index) throws CharacterCodingException {
+    static HashMap<String, Holder> processChunk(char[] chunk, int index) throws CharacterCodingException {
         HashMap<String, Holder> resultsMap = new HashMap<>();
         StringBuilder builder = new StringBuilder(512);
-        CharBuffer chars = StandardCharsets.UTF_8.newDecoder().decode(chunk);
-        //ISO-8859-1
+        int charI = 0;
         if (index != 0) {
-            while (true) {
-                char c = chars.get();
+            for (; charI < chunk.length; charI++) {
+                char c = chunk[charI];
                 if (c == '\n') {
+                    charI += 1;
                     break;
                 }
                 builder.append(c);
@@ -192,8 +200,8 @@ public class CalculateAverage2 {
             startingParts[index] = builder.toString();
             builder = new StringBuilder(512);
         }
-        do {
-            char c1 = chars.get();
+        for (; charI < chunk.length; charI++) {
+            char c1 = chunk[charI];
             if (c1 == '\n') {
                 String line = builder.toString();
 
@@ -213,7 +221,7 @@ public class CalculateAverage2 {
             }
             builder.append(c1);
 
-        }while (chars.hasRemaining());
+        }
 
         remainders[index] = builder.toString();
 

@@ -15,33 +15,31 @@
  */
 package dev.morling.onebrc;
 
-import java.io.*;
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.lang.reflect.Array;
 import java.nio.CharBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
-import static java.util.stream.Collectors.groupingByConcurrent;
-
-public class CalculateAverage2 {
+public class CalculateAverage22 {
 
     private static final String FILE = "./measurements.txt";
-    private static final int THREADS = 230;
-    private static final int BUFFER_SIZE = 30_000_000;
+    private static final int THREADS = 115;
+    private static final int BUFFER_SIZE = 120_000_000;
 
     static class Holder {
-        String name;
+        char[] name;
         Double value;
         int count;
         Double max;
         Double min;
 
-        public Holder(String name, Double value, int count, Double max, Double min) {
+        public Holder(char[] name, Double value, int count, Double max, Double min) {
             this.name = name;
             this.value = value;
             this.count = count;
@@ -50,10 +48,10 @@ public class CalculateAverage2 {
         }
 
         public Holder() {
-            this("", 0.0, 0, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
+            this(null, 0.0, 0, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY);
         }
 
-        String name() {
+        char[] name() {
             return name;
         }
 
@@ -72,7 +70,40 @@ public class CalculateAverage2 {
 
         @Override
         public String toString() {
-            return name + "=" + min + "/" + String.format("%.1f", value / count) + "/" + max;
+            return new String(name) + "=" + min + "/" + String.format("%.1f", value / count) + "/" + max;
+        }
+    }
+
+    static class Chars implements Comparable<Chars>{
+        char[] buff;
+        static Chars wrap(char[] c){
+            Chars tmp = new Chars();
+            tmp.buff = c;
+            return tmp;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Chars chars = (Chars) o;
+            return Arrays.equals(buff, chars.buff);
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(buff);
+        }
+
+        @Override
+        public int compareTo(Chars o) {
+            for(int i = 0; i < Math.min(this.buff.length, o.buff.length); i++){
+                if(this.buff[i] != o.buff[i]){
+                    return this.buff[i] - o.buff[i];
+                }
+            }
+
+            return 0;
         }
     }
 
@@ -88,12 +119,11 @@ public class CalculateAverage2 {
             long sizeToRead = channel.size() - ((long) i) * BUFFER_SIZE;
             sizeToRead = Math.min(BUFFER_SIZE, sizeToRead);
 
-            //System.out.println("Reading from " + positionStart + " " + sizeToRead + " bytes. Reading to " + (positionStart + sizeToRead));
             MappedByteBuffer buff = channel.map(FileChannel.MapMode.READ_ONLY, positionStart, sizeToRead);
             chunks.add(buff);
         }
 
-        List<Map<String, Holder>> resultMaps = Collections.synchronizedList(new ArrayList<>(32));
+        List<Map<Chars, Holder>> resultMaps = Collections.synchronizedList(new ArrayList<>(32));
         LinkedList<Thread> threads = new LinkedList<>();
         int index = 0;
         int size = chunks.size();
@@ -102,7 +132,7 @@ public class CalculateAverage2 {
             final int indexTostart = index++;
             threads.add(Thread.startVirtualThread(() -> {
                 try {
-                    HashMap<String, Holder> r = processChunk(c, indexTostart);
+                    HashMap<Chars, Holder> r = processChunk(c, indexTostart);
                     resultMaps.add(r);
                 } catch (CharacterCodingException e) {
                     throw new RuntimeException(e);
@@ -115,7 +145,6 @@ public class CalculateAverage2 {
                     t.join();
                 }
                 threads.clear();
-                System.out.println("Processed chunks: " + index + " of " + size);
             }
 
         }
@@ -124,9 +153,8 @@ public class CalculateAverage2 {
             t.join();
         }
 
-
         //process remainders
-        Map<String, Holder> first = resultMaps.get(0);
+        Map<Chars, Holder> first = resultMaps.get(0);
         for (int i = 0; i < index; i++) {
             String line = remainders[i] + (startingParts[i + 1] == null ? "" : startingParts[i + 1]);
 
@@ -136,16 +164,15 @@ public class CalculateAverage2 {
 
             String[] split = line.split(";");
             double v = Double.parseDouble(split[1]);
-            Holder newHolder = new Holder(split[0], v, 1, v, v);
+            Holder newHolder = new Holder(split[0].toCharArray(), v, 1, v, v);
             Holder tmp = first.get(newHolder.name);
             if (tmp != null) {
-                first.put(newHolder.name, tmp.merge(newHolder));
+                first.put(Chars.wrap(newHolder.name), tmp.merge(newHolder));
             } else {
-                first.put(newHolder.name, newHolder);
+                first.put(Chars.wrap(newHolder.name), newHolder);
             }
         }
 
-        System.out.println((System.currentTimeMillis() - testStart) + " ms - finished the file processing");
 
         ///merge all maps
 
@@ -153,15 +180,14 @@ public class CalculateAverage2 {
             for (var h : resultMaps.get(i).values()) {
                 Holder tmp = first.get(h.name);
                 if (tmp != null) {
-                    first.put(h.name, tmp.merge(h));
+                    first.put(Chars.wrap(h.name), tmp.merge(h));
                 } else {
-                    first.put(h.name, h);
+                    first.put(Chars.wrap(h.name), h);
                 }
             }
         }
 
 
-        System.out.println((System.currentTimeMillis() - testStart) + " ms - merged the maps");
 
 
         System.out.print("{");
@@ -169,53 +195,55 @@ public class CalculateAverage2 {
         System.out.print(resultString);
         System.out.print("}\n");
 
-        System.out.println((System.currentTimeMillis() - testStart) + " ms finished");
     }
 
     static String[] remainders = new String[5000];
     static String[] startingParts = new String[5000];
 
-    static HashMap<String, Holder> processChunk(MappedByteBuffer chunk, int index) throws CharacterCodingException {
-        HashMap<String, Holder> resultsMap = new HashMap<>();
-        StringBuilder builder = new StringBuilder(512);
+    static HashMap<Chars, Holder> processChunk(MappedByteBuffer chunk, int index) throws CharacterCodingException {
+        HashMap<Chars, Holder> resultsMap = new HashMap<>();
+        char[] buff = new char[128];
+        int cIndex = 0;
+
         CharBuffer chars = StandardCharsets.UTF_8.newDecoder().decode(chunk);
-        //ISO-8859-1
         if (index != 0) {
             while (true) {
                 char c = chars.get();
                 if (c == '\n') {
                     break;
                 }
-                builder.append(c);
+                buff[cIndex++] = c;
             }
 
-            startingParts[index] = builder.toString();
-            builder = new StringBuilder(512);
+            startingParts[index] = String.valueOf(buff, 0, cIndex);
+            cIndex = 0;
         }
+        char[] tmpName = null;
         do {
             char c1 = chars.get();
+            if(c1 == ';'){
+                tmpName = Arrays.copyOf(buff, cIndex);
+                cIndex = 0;
+            }
             if (c1 == '\n') {
-                String line = builder.toString();
+                Chars key = Chars.wrap(Arrays.copyOfRange(buff, 1, cIndex));
+                double v = Double.parseDouble(new String(key.buff));
 
-                String[] split = line.split(";");
-                double v = Double.parseDouble(split[1]);
-
-                Holder newHolder = new Holder(split[0], v, 1, v, v);
-                Holder tmp = resultsMap.get(split[0]);
+                Holder newHolder = new Holder(tmpName, v, 1, v, v);
+                Holder tmp = resultsMap.get(key);
                 if (tmp == null) {
-                    resultsMap.put(newHolder.name, newHolder);
+                    resultsMap.put(key, newHolder);
                 } else {
-                    resultsMap.put(newHolder.name, tmp.merge(newHolder));
+                    resultsMap.put(key, tmp.merge(newHolder));
                 }
 
-                builder = new StringBuilder(512);
+                cIndex = 0;
                 continue;
             }
-            builder.append(c1);
-
+            buff[cIndex++] = c1;
         }while (chars.hasRemaining());
 
-        remainders[index] = builder.toString();
+        remainders[index] = new String(Arrays.copyOf(buff, cIndex));
 
         return resultsMap;
     }
